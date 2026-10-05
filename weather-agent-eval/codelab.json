@@ -1,0 +1,23 @@
+{
+  "environment": "web",
+  "format": "html",
+  "prefix": "https://storage.googleapis.com",
+  "mainga": "UA-49880327-14",
+  "updated": "2026-10-06T00:51:00+01:00",
+  "id": "weather-agent-eval",
+  "duration": 0,
+  "title": "Weather agent evaluation, for beginners",
+  "summary": "Weather agent evaluation, for beginners",
+  "source": "INSTRUCTIONS.md",
+  "theme": "",
+  "status": [
+    "published"
+  ],
+  "category": [
+    "sample"
+  ],
+  "tags": [
+    "web"
+  ],
+  "url": "weather-agent-eval"
+}

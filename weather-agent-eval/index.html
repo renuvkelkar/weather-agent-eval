@@ -1,0 +1,421 @@
+
+<!doctype html>
+
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, user-scalable=yes">
+  <meta name="theme-color" content="#4F7DC9">
+  <meta charset="UTF-8">
+  <title>Weather agent evaluation, for beginners</title>
+  <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Source+Code+Pro:400|Roboto:400,300,400italic,500,700|Roboto+Mono">
+  <link rel="stylesheet" href="//fonts.googleapis.com/icon?family=Material+Icons">
+  <link rel="stylesheet" href="https://storage.googleapis.com/claat-public/codelab-elements.css">
+  <style>
+    .success {
+      color: #1e8e3e;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <google-codelab-analytics gaid="UA-49880327-14" ga4id=""></google-codelab-analytics>
+  <google-codelab codelab-gaid=""
+                  codelab-ga4id=""
+                  id="weather-agent-eval"
+                  title="Weather agent evaluation, for beginners"
+                  environment="web"
+                  feedback-link="">
+    
+      <google-codelab-step label="What you need before you start" duration="0">
+        <ul>
+<li>A computer with a terminal (the app where you type commands).</li>
+<li>Python 3.12 or newer.</li>
+<li><code>uv</code>, a tool that installs Python packages for this project.</li>
+</ul>
+<p>Check both in the terminal:</p>
+<pre><code language="language-bash" class="language-bash">python3 --version
+uv --version
+</code></pre>
+<p>You want a Python version of 3.12 or higher, and any recent <code>uv</code> version. If <code>uv</code> is missing, install it from <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank">https://docs.astral.sh/uv/getting-started/installation/</a>, then open a new terminal and try <code>uv --version</code> again.</p>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Words used in this guide" duration="0">
+        <ul>
+<li><strong>Agent.</strong> A program that reads a question, decides what to do, and writes an answer. This one answers weather questions.</li>
+<li><strong>Tool.</strong> A normal Python function the agent is allowed to call. Our tool looks up the weather. The agent is supposed to call it instead of guessing.</li>
+<li><strong>Evaluation (eval).</strong> A test run. We give the agent a question we already know the answer to, then score what it did.</li>
+<li><strong>Golden dataset.</strong> The answer key. It stores the question, the tool call we expect, and the sentence we expect back.</li>
+<li><strong>Trajectory.</strong> The list of tool calls the agent made, including the arguments. This is the &#34;math&#34;: did it do the right steps, in the right order?</li>
+<li><strong>ADK.</strong> The Agent Development Kit from Google. It runs the agent and scores the test.</li>
+<li><strong>Threshold.</strong> The minimum score that still counts as a pass.</li>
+</ul>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="The basics of evals" duration="0">
+        <p>An eval is a repeatable test for an agent. You write the question in advance, you write what a good run looks like, and then a program runs the agent and scores it. You can run the same test again after you change the prompt, the tool, or the model. If a score drops, something you changed broke the agent&#39;s behavior.</p>
+<p>A normal program test is strict and simple. <code>2 + 2</code> should return <code>4</code> every time. An agent is different. It reads language, chooses a next step, and may call a tool. Two runs can word the answer differently and still both be acceptable. An eval still needs a clear pass or fail, so it scores the run against a written standard instead of demanding one exact string every time.</p>
+<h2 is-upgraded>What one test case contains</h2>
+<p>One case in the golden dataset is one exam question. It always has three parts:</p>
+<ol type="1">
+<li><strong>The input.</strong> The user&#39;s question. Here that is &#34;What is the weather like in London today?&#34;</li>
+<li><strong>The expected response.</strong> The sentence you want back, or a sentence close to it. Here that is &#34;The weather in London today is 18°C and partly cloudy.&#34;</li>
+<li><strong>The expected trajectory.</strong> The steps the agent must take before that sentence. Here there is one step: call <code>get_current_weather</code> with <code>location</code> set to <code>London</code>.</li>
+</ol>
+<p>The dataset is called golden because it is the answer key you trust. The agent does not get to grade itself.</p>
+<h2 is-upgraded>Essay versus math</h2>
+<p>Most checks on a chat model grade the essay. They ask: does the final paragraph sound fluent, polite, and roughly correct? That is useful, and it is not enough for an agent.</p>
+<p>An agent also does the math. The math is the work: which tool it called, which arguments it passed, and whether it did those steps in a safe order. The final sentence can look perfect while the work was wrong.</p>
+<p>Three failures that an essay-only check misses:</p>
+<ul>
+<li><strong>A lucky hallucination.</strong> The user asks for London weather. The agent never calls the weather tool and simply writes &#34;18°C and partly cloudy.&#34; The sentence matches the answer key. The behavior is still wrong, because the number was guessed. The trajectory score catches this, because the required tool call is missing.</li>
+<li><strong>A broken business rule.</strong> Some jobs must happen in order. A bank agent should confirm who the user is before it reads a balance. A weather agent should look up the city before it states the temperature. The trajectory is the record of that order.</li>
+<li><strong>A silent regression.</strong> You rewrite the instructions, rename a tool argument, or switch models. The agent still chats politely, but it now sends <code>london</code> or <code>London, UK</code> instead of <code>London</code>, or it stops calling the tool. Nothing crashes. Users only notice later. An eval suite is the safety net you run before you ship that change.</li>
+</ul>
+<h2 is-upgraded>What the two scores mean</h2>
+<p>This project uses two scores. Both are numbers from 0 to 1. Each has a threshold, the lowest score that still passes.</p>
+<ul>
+<li><strong><code>tool_trajectory_avg_score</code></strong><strong> is set to </strong><strong><code>1.0</code></strong><strong>.</strong> This grades the math. ADK compares the tool calls the agent actually made with the tool calls in the answer key. The default comparison is exact: same tool name, same arguments, same order, and no extra calls. <code>1.0</code> means every compared call matched. <code>0</code> means it did not. There is no partial credit at this setting. <code>get_current_weather({"location": "London"})</code> passes. Skipping the tool, calling a different tool, or sending <code>"london"</code> fails.</li>
+<li><strong><code>response_match_score</code></strong><strong> is set to </strong><strong><code>0.7</code></strong><strong>.</strong> This grades the essay, with a number instead of a vibe. ADK uses ROUGE-1, which measures how many words in the agent&#39;s sentence also appear in the reference sentence. <code>1.0</code> means the words match fully. <code>0.7</code> means a little rephrasing is allowed, and a vague or unrelated sentence is not. Our agent repeats the tool&#39;s sentence exactly, so this score comes back as <code>1.0</code>.</li>
+</ul>
+<p>A case passes only when every scored metric is at or above its threshold. One bad score fails the case. Extra lines in the report, such as how many tokens were used or how many seconds the turn took, are information. They do not decide the pass unless you add a threshold for them.</p>
+<h2 is-upgraded>How a run works</h2>
+<p>You do not chat with the agent by hand during an eval. The runner does this for you:</p>
+<ol type="1">
+<li>It loads the agent (<code>root_agent</code> in <code>weather_time_agent</code>).</li>
+<li>It loads the answer key (<code>weather_eval.evalset.json</code>) and the thresholds (<code>test_config.json</code>).</li>
+<li>It starts a fresh session and sends the user question.</li>
+<li>It records every tool call and the final sentence.</li>
+<li>It compares that record with the golden case and prints pass or fail.</li>
+</ol>
+<p>Google ADK can do that in three places. This guide uses the terminal command <code>adk eval</code>. The same idea exists in a browser UI (<code>adk web</code>), where you can watch a session and save it as a new golden case, and in Python tests (<code>pytest</code>), where the same check can run automatically whenever the code changes.</p>
+<h2 is-upgraded>What this weather example is teaching</h2>
+<p>The London case is small on purpose. The lesson is the shape of an eval, not meteorology. A correct agent may not answer from memory. It must call <code>get_current_weather</code> for London, then say the temperature that the tool returned. If you later point the same agent at a real model and the model guesses the weather, the sentence might still look fine and the trajectory score will still fail. That failure is the point.</p>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="What the finished folder looks like" duration="0">
+        <pre><code language="language-text" class="language-text">.
+├── INSTRUCTIONS.md
+├── pyproject.toml
+├── test_config.json
+├── weather_eval.evalset.json
+└── weather_time_agent/
+    ├── __init__.py
+    ├── agent.py
+    └── .env
+</code></pre>
+<p>If these files are already in your folder, skip to <a href="#run-the-test" target="_blank">Run the test</a>. The steps below are for building the same project in an empty folder.</p>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Build it yourself" duration="0">
+        <p>Open a terminal. Go to an empty folder. Run the commands one at a time. Wait for each one to finish before you type the next.</p>
+<h2 is-upgraded>1. Create the project and install ADK</h2>
+<pre><code language="language-bash" class="language-bash">uv init --bare --vcs none --python 3.12 --name weather-agent-eval --no-description
+uv add --dev &#34;google-adk[eval]&#34;
+</code></pre>
+<p>The first command creates <code>pyproject.toml</code>. The second installs Google ADK and the extra packages the scorer needs. The install can take a minute. It is finished when the terminal shows a new prompt and no error.</p>
+<h2 is-upgraded>2. Create the score settings</h2>
+<p>Create a file named <code>test_config.json</code> in the project folder (the same folder as <code>pyproject.toml</code>). Paste this:</p>
+<pre><code language="language-json" class="language-json">{
+  &#34;criteria&#34;: {
+    &#34;tool_trajectory_avg_score&#34;: 1.0,
+    &#34;response_match_score&#34;: 0.7
+  }
+}
+</code></pre>
+<p>Two scores must pass:</p>
+<ul>
+<li><code>tool_trajectory_avg_score</code> of <code>1.0</code> means the tool call must match exactly. The name is <code>get_current_weather</code>. The only argument is <code>"location": "London"</code>. A different city spelling, an extra tool call, or a skipped tool call fails.</li>
+<li><code>response_match_score</code> of <code>0.7</code> means the final sentence must share most of its words with the answer key. The scorer uses ROUGE-1, which is a word-overlap score from 0 to 1. <code>0.7</code> leaves a little room for different wording. An exact sentence scores <code>1.0</code>.</li>
+</ul>
+<h2 is-upgraded>3. Create the answer key</h2>
+<p>Create <code>weather_eval.evalset.json</code> in the same folder. Paste this:</p>
+<pre><code language="language-json" class="language-json">{
+  &#34;eval_set_id&#34;: &#34;weather_demo_set&#34;,
+  &#34;name&#34;: &#34;Weather Agent Demo Evaluation&#34;,
+  &#34;eval_cases&#34;: [
+    {
+      &#34;eval_id&#34;: &#34;check_london_weather&#34;,
+      &#34;conversation&#34;: [
+        {
+          &#34;invocation_id&#34;: &#34;inv_01&#34;,
+          &#34;user_content&#34;: {
+            &#34;role&#34;: &#34;user&#34;,
+            &#34;parts&#34;: [
+              {
+                &#34;text&#34;: &#34;What is the weather like in London today?&#34;
+              }
+            ]
+          },
+          &#34;intermediate_data&#34;: {
+            &#34;tool_uses&#34;: [
+              {
+                &#34;name&#34;: &#34;get_current_weather&#34;,
+                &#34;args&#34;: {
+                  &#34;location&#34;: &#34;London&#34;
+                }
+              }
+            ],
+            &#34;intermediate_responses&#34;: []
+          },
+          &#34;final_response&#34;: {
+            &#34;role&#34;: &#34;model&#34;,
+            &#34;parts&#34;: [
+              {
+                &#34;text&#34;: &#34;The weather in London today is 18°C and partly cloudy.&#34;
+              }
+            ]
+          }
+        }
+      ],
+      &#34;session_input&#34;: {
+        &#34;app_name&#34;: &#34;weather_time_agent&#34;,
+        &#34;user_id&#34;: &#34;demo_user&#34;
+      }
+    }
+  ]
+}
+</code></pre>
+<p>Read it as one exam question:</p>
+<ul>
+<li>The user asks about the weather in London.</li>
+<li>The agent must call <code>get_current_weather</code> with <code>London</code>.</li>
+<li>The agent must then say the London sentence above.</li>
+<li><code>app_name</code> must be <code>weather_time_agent</code>, because that is the folder name of the agent.</li>
+</ul>
+<p>Put the expected tool call inside <code>intermediate_data.tool_uses</code>. This version of ADK scores that field. A field named <code>tool_calls</code> next to <code>user_content</code> is ignored and can make the file fail to load.</p>
+<h2 is-upgraded>4. Create the agent</h2>
+<p>Make a folder named <code>weather_time_agent</code>. Put three files inside it.</p>
+<p><strong>File 1: </strong></p>
+<p><strong><code>weather_time_agent/__init__.py</code></strong></p>
+<p>This one line lets ADK find the agent. Without it, the test cannot start.</p>
+<pre><code language="language-python" class="language-python">from . import agent
+</code></pre>
+<p><strong>File 2: </strong></p>
+<p><strong><code>weather_time_agent/agent.py</code></strong></p>
+<p>Paste this whole file. Do not rename <code>root_agent</code> or <code>get_current_weather</code>. The test looks for those names.</p>
+<pre><code language="language-python" class="language-python">&#34;&#34;&#34;Weather agent that must look up conditions before it answers.
+
+The model is a local policy so `adk eval` can run without a Gemini API key.
+It still has to call `get_current_weather` and then speak from that result,
+which is what the golden trajectory checks.
+&#34;&#34;&#34;
+
+from __future__ import annotations
+
+import re
+from typing import AsyncGenerator
+
+from google.adk.agents import Agent
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from google.genai import types
+
+_WEATHER = {
+    &#34;london&#34;: {&#34;temperature_c&#34;: 18, &#34;condition&#34;: &#34;partly cloudy&#34;},
+}
+
+
+def get_current_weather(location: str) -&gt; dict:
+  &#34;&#34;&#34;Look up the current weather for a city.
+
+  Call this tool before answering any weather question.
+
+  Args:
+    location: City name exactly as the user wrote it, for example London.
+
+  Returns:
+    A status payload whose report field is the sentence to show the user.
+  &#34;&#34;&#34;
+  reading = _WEATHER.get(location.strip().lower())
+  if reading is None:
+    return {
+        &#34;status&#34;: &#34;error&#34;,
+        &#34;error_message&#34;: (
+            f&#34;Weather information for &#39;{location}&#39; is not available.&#34;
+        ),
+    }
+
+  report = (
+      f&#34;The weather in {location} today is {reading[&#39;temperature_c&#39;]}°C&#34;
+      f&#34; and {reading[&#39;condition&#39;]}.&#34;
+  )
+  return {
+      &#34;status&#34;: &#34;success&#34;,
+      &#34;location&#34;: location,
+      &#34;temperature_c&#34;: reading[&#34;temperature_c&#34;],
+      &#34;condition&#34;: reading[&#34;condition&#34;],
+      &#34;report&#34;: report,
+  }
+
+
+_LOCATION_STOPWORDS = {&#34;what&#34;, &#34;the&#34;, &#34;is&#34;, &#34;like&#34;, &#34;in&#34;, &#34;today&#34;}
+
+
+def _location_from_request(llm_request: LlmRequest) -&gt; str:
+  &#34;&#34;&#34;Return the city name using the capitalization in the user text.&#34;&#34;&#34;
+  for content in llm_request.contents:
+    for part in content.parts or []:
+      if not part.text:
+        continue
+      for match in re.finditer(
+          r&#34;\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b&#34;, part.text
+      ):
+        city = match.group(1)
+        if city.lower() not in _LOCATION_STOPWORDS:
+          return city
+  return &#34;London&#34;
+
+
+def _report_from_tool_response(llm_request: LlmRequest) -&gt; str | None:
+  &#34;&#34;&#34;Read the weather tool result already present in this turn.&#34;&#34;&#34;
+  for content in reversed(llm_request.contents):
+    for part in content.parts or []:
+      function_response = part.function_response
+      if (
+          function_response is None
+          or function_response.name != &#34;get_current_weather&#34;
+      ):
+        continue
+      payload = function_response.response or {}
+      if not isinstance(payload, dict):
+        return str(payload)
+      report = payload.get(&#34;report&#34;)
+      if isinstance(report, str):
+        return report
+      error_message = payload.get(&#34;error_message&#34;)
+      if isinstance(error_message, str):
+        return error_message
+  return None
+
+
+class WeatherLookupModel(BaseLlm):
+  &#34;&#34;&#34;Calls the weather tool, then repeats the tool&#39;s report.&#34;&#34;&#34;
+
+  async def generate_content_async(
+      self, llm_request: LlmRequest, stream: bool = False
+  ) -&gt; AsyncGenerator[LlmResponse, None]:
+    del stream
+    report = _report_from_tool_response(llm_request)
+    if report is None:
+      part = types.Part(
+          function_call=types.FunctionCall(
+              name=&#34;get_current_weather&#34;,
+              args={&#34;location&#34;: _location_from_request(llm_request)},
+          )
+      )
+    else:
+      part = types.Part(text=report)
+
+    yield LlmResponse(
+        content=types.Content(role=&#34;model&#34;, parts=[part]),
+    )
+
+
+root_agent = Agent(
+    name=&#34;weather_time_agent&#34;,
+    model=WeatherLookupModel(model=&#34;weather-lookup-policy&#34;),
+    description=(
+        &#34;Agent that answers weather questions by looking up current conditions.&#34;
+    ),
+    instruction=(
+        &#34;You are a weather agent. Before you answer any weather question, &#34;
+        &#34;call get_current_weather exactly once. Pass location as the city &#34;
+        &#34;name only, with the same capitalization the user used. After the &#34;
+        &#34;tool returns, reply with the report field verbatim and nothing else.&#34;
+    ),
+    tools=[get_current_weather],
+)
+</code></pre>
+<p>How the file works, in plain language:</p>
+<ol type="1">
+<li><code>get_current_weather</code> is the lookup. For London it returns 18°C and partly cloudy, and a <code>report</code> sentence.</li>
+<li><code>WeatherLookupModel</code> is a stand-in for a cloud model. First it asks for the tool. After the tool result comes back, it repeats the <code>report</code> sentence. It does not invent the weather.</li>
+<li><code>root_agent</code> is the object ADK runs. The name <code>root_agent</code> is required.</li>
+</ol>
+<p>This stand-in is here so the test runs with no Gemini API key. A cloud call in this setup was rejected with permission denied. The test still checks the important rule: call the tool, then answer from the tool result.</p>
+<p><strong>File 3: </strong></p>
+<p><strong><code>weather_time_agent/.env</code></strong></p>
+<p>Optional. The local agent does not read it. Save it only if you want a reminder for later:</p>
+<pre><code language="language-text" class="language-text"># Optional. Uncomment and set a key to swap the agent model to Gemini.
+# GOOGLE_API_KEY=
+</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Run the test" duration="0">
+        <p>In the terminal, the current folder must be the project folder. That is the folder that contains <code>test_config.json</code> and <code>weather_time_agent</code>. Then run:</p>
+<pre><code language="language-bash" class="language-bash">uv run adk eval weather_time_agent weather_eval.evalset.json --config_file_path=test_config.json --print_detailed_results
+</code></pre>
+<p>What each piece means:</p>
+<ul>
+<li><code>uv run</code> uses the packages installed in step 1.</li>
+<li><code>adk eval</code> is the test command.</li>
+<li><code>weather_time_agent</code> is the agent folder.</li>
+<li><code>weather_eval.evalset.json</code> is the answer key.</li>
+<li><code>--config_file_path=test_config.json</code> loads the pass marks.</li>
+<li><code>--print_detailed_results</code> prints the question, the expected answer, the real answer, and the tool call.</li>
+</ul>
+<p>The first run can take a few seconds while Python starts. Later runs are faster.</p>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="What a pass looks like" duration="0">
+        <p>You are looking for these lines. Extra warning lines above them are normal and do not mean the test failed.</p>
+<pre><code language="language-text" class="language-text">Eval Run Summary
+weather_demo_set:
+  Tests passed: 1
+  Tests failed: 0
+
+Eval Id: check_london_weather
+Overall Eval Status: PASSED
+Metric: tool_trajectory_avg_score, Status: PASSED, Score: 1.0, Threshold: 1.0
+Metric: response_match_score, Status: PASSED, Score: 1.0, Threshold: 0.7
+</code></pre>
+<p>Read the two scores this way:</p>
+<ul>
+<li><strong>Tool score 1.0, passed.</strong> The agent called <code>get_current_weather</code> once, with <code>location</code> equal to <code>London</code>.</li>
+<li><strong>Response score 1.0, passed.</strong> The sentence matched the answer key. The pass mark is <code>0.7</code>, so a close sentence can still pass. This run matched exactly.</li>
+</ul>
+<p>ADK also prints extra numbers for tool-call count, token use, and how long the turn took. Those are information only. They do not pass or fail this test.</p>
+<p>The program saves a copy of the result in <code>weather_time_agent/.adk/eval_history/</code>. You can ignore that folder.</p>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="If something goes wrong" duration="0">
+        <ul>
+<li><strong><code>uv: command not found</code></strong><strong>.</strong> Install <code>uv</code>, then open a new terminal.</li>
+<li><strong><code>No module named 'google.adk'</code></strong><strong>.</strong> Run the install command again from the project folder: <code>uv add --dev "google-adk[eval]"</code>. Then start the test with <code>uv run</code>, not plain <code>adk</code>.</li>
+<li><strong>The agent folder is not found.</strong> The command must be run in the folder that contains <code>weather_time_agent</code>, and that folder must contain <code>__init__.py</code> and <code>agent.py</code>.</li>
+<li><strong>The test fails with a JSON error.</strong> Open <code>weather_eval.evalset.json</code> and compare it with the copy in this guide. The tool call belongs under <code>intermediate_data.tool_uses</code>.</li>
+<li><strong>Tool score is 0.</strong> The agent called the wrong tool, used the wrong argument, or called more than one tool. The expected call is exactly <code>get_current_weather</code> with <code>{"location": "London"}</code>.</li>
+<li><strong>Response score is below 0.7.</strong> The final sentence drifted too far from &#34;The weather in London today is 18°C and partly cloudy.&#34;</li>
+<li><strong>A 403 or permission error from Google Cloud.</strong> The test was pointed at Gemini without access. This project uses the local <code>WeatherLookupModel</code> so it can pass without a cloud key.</li>
+</ul>
+
+
+      </google-codelab-step>
+    
+  </google-codelab>
+
+  <script src="https://storage.googleapis.com/claat-public/native-shim.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/custom-elements.min.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/prettify.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/codelab-elements.js"></script>
+  <script src="//support.google.com/inapp/api.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,45 @@
+{
+  "eval_set_id": "weather_demo_set",
+  "name": "Weather Agent Demo Evaluation",
+  "eval_cases": [
+    {
+      "eval_id": "check_london_weather",
+      "conversation": [
+        {
+          "invocation_id": "inv_01",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What is the weather like in London today?"
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "get_current_weather",
+                "args": {
+                  "location": "London"
+                }
+              }
+            ],
+            "intermediate_responses": []
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "The weather in London today is 18°C and partly cloudy."
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "weather_time_agent",
+        "user_id": "demo_user"
+      }
+    }
+  ]
+}
